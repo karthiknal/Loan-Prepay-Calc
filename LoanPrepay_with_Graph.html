@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Loan Amortization Calculator - Bank Statement Logic</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f4f6f8;
+    margin: 0;
+    padding: 20px;
+  }
+  .container {
+    max-width: 720px;
+    margin: auto;
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+  }
+  h2 {
+    text-align: center;
+    color: #333;
+  }
+  label {
+    font-weight: bold;
+    display: block;
+    margin-top: 10px;
+  }
+  input, select, button {
+    width: 100%;
+    padding: 10px;
+    margin-top: 5px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    box-sizing: border-box;
+  }
+  button {
+    background: #007bff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    margin-top: 15px;
+  }
+  button:hover {
+    background: #0056b3;
+  }
+  .card {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 15px;
+  }
+  .breakdown {
+    display: none;
+    margin-top: 15px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: center;
+  }
+  th {
+    background: #007bff;
+    color: white;
+  }
+  .toggle-btn {
+    background: #28a745;
+  }
+  .toggle-btn:hover {
+    background: #1e7e34;
+  }
+  .prepayment-item {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .prepayment-item input {
+    flex: 1;
+  }
+  .remove-btn {
+    width: auto;
+    background: #dc3545;
+  }
+  .remove-btn:hover {
+    background: #a71d2a;
+  }
+  #addPrepaymentBtn {
+    background: #17a2b8;
+  }
+  #addPrepaymentBtn:hover {
+    background: #117a8b;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Loan Amortization Calculator</h2>
+
+  <label for="loanAmount">Loan Amount (₹):</label>
+  <input type="number" id="loanAmount" min="1" />
+
+  <label for="interestRate">Annual Interest Rate (%):</label>
+  <input type="number" id="interestRate" min="0" step="0.01" />
+
+  <label for="loanTenure">Loan Tenure (months):</label>
+  <input type="number" id="loanTenure" min="1" />
+
+  <label for="loanStartDate">Loan Start Date:</label>
+  <input type="date" id="loanStartDate" />
+
+  <label for="prepaymentType">Prepayment Type:</label>
+  <select id="prepaymentType">
+    <option value="tenure">Tenure Reduction</option>
+    <option value="emi">EMI Reduction</option>
+  </select>
+
+  <label>Prepayments (date & lump sum):</label>
+  <div id="prepaymentsList"></div>
+  <button type="button" id="addPrepaymentBtn">+ Add Prepayment</button>
+
+  <button id="calculateBtn">Calculate</button>
+
+  <div id="result" class="card" style="display:none;"></div>
+
+  <button id="toggleBreakdown" class="toggle-btn" style="display:none;">Show Breakdown</button>
+
+  <div class="breakdown" id="breakdownTable"></div>
+
+  <div id="chart-container" style="display: none; margin-top: 20px;">
+    <h3>Loan Visualizations</h3>
+    <div class="card" style="margin-top: 15px;">
+        <canvas id="comparisonChart"></canvas>
+    </div>
+    <div class="card" style="margin-top: 15px;">
+        <canvas id="principalInterestChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const calculateBtn = document.getElementById("calculateBtn");
+  const toggleBtn = document.getElementById("toggleBreakdown");
+  const breakdownDiv = document.getElementById("breakdownTable");
+  const resultDiv = document.getElementById("result");
+  const prepaymentsList = document.getElementById("prepaymentsList");
+  const addPrepaymentBtn = document.getElementById("addPrepaymentBtn");
+
+  let charts = {}; // Store chart instances to destroy and re-create
+
+  function addPrepaymentRow(date = "", amount = "") {
+    const div = document.createElement("div");
+    div.className = "prepayment-item";
+
+    const dateInput = document.createElement("input");
+    dateInput.type = "date";
+    dateInput.value = date;
+    dateInput.required = true;
+
+    const amountInput = document.createElement("input");
+    amountInput.type = "number";
+    amountInput.placeholder = "Lump Sum (₹)";
+    amountInput.min = "1";
+    amountInput.value = amount;
+    amountInput.required = true;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "Remove";
+    removeBtn.className = "remove-btn";
+    removeBtn.addEventListener("click", () => {
+      prepaymentsList.removeChild(div);
+    });
+
+    div.appendChild(dateInput);
+    div.appendChild(amountInput);
+    div.appendChild(removeBtn);
+
+    prepaymentsList.appendChild(div);
+  }
+
+  addPrepaymentBtn.addEventListener("click", () => {
+    addPrepaymentRow();
+  });
+  
+  function formatDate(date) {
+      const year = date.getFullYear();
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const day = date.getDate().toString().padStart(2, '0');
+      return `${year}-${month}-${day}`;
+  }
+
+  // New function to calculate a full amortization schedule and return a clean monthly report
+  function getMonthlyReport(loanAmount, monthlyRate, tenure, loanStartDate, prepayments = []) {
+      const dailyRate = monthlyRate * 12 / 365;
+      
+      let emi;
+      if (monthlyRate === 0) {
+        emi = loanAmount / tenure;
+      } else {
+        emi = loanAmount * monthlyRate * Math.pow(1 + monthlyRate, tenure) / (Math.pow(1 + monthlyRate, tenure) - 1);
+      }
+      
+      let balance = loanAmount;
+      let breakdown = [];
+      let monthlyReport = [];
+      let prepaymentIndex = 0;
+      let totalMonths = 0;
+      
+      let currentDate = new Date(loanStartDate);
+
+      // Add a disbursement event to the breakdown
+      breakdown.push({
+        event: "Loan Disbursement",
+        emi: 0,
+        interest: 0,
+        principal: 0,
+        balance: Math.ceil(balance),
+        date: formatDate(loanStartDate)
+      });
+      
+      while (balance > 0 && totalMonths < tenure + 100) {
+          totalMonths++;
+          let cumulativeInterestForMonth = 0;
+          let cumulativePrincipalForMonth = 0;
+          let monthlyEvents = [];
+
+          const cycleStartDate = new Date(currentDate);
+          let cycleEndDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+          
+          let lastEventDate = new Date(cycleStartDate);
+          
+          // Process prepayments within the current month's cycle
+          while (prepaymentIndex < prepayments.length && prepayments[prepaymentIndex].date <= cycleEndDate) {
+              const prepayment = prepayments[prepaymentIndex];
+              const daysSinceLastEvent = (prepayment.date.getTime() - lastEventDate.getTime()) / (1000 * 60 * 60 * 24);
+              const interestForPeriod = balance * dailyRate * daysSinceLastEvent;
+              cumulativeInterestForMonth += interestForPeriod;
+              
+              monthlyEvents.push({
+                  event: `Lump Sum Prepayment`,
+                  emi: 0,
+                  interest: 0,
+                  principal: prepayment.lumpSum,
+                  balance: balance - prepayment.lumpSum,
+                  date: formatDate(prepayment.date),
+                  month: totalMonths
+              });
+
+              balance -= prepayment.lumpSum;
+              lastEventDate = new Date(prepayment.date);
+              prepaymentIndex++;
+
+              if (balance <= 0) break;
+          }
+          if (balance <= 0) {
+            breakdown = breakdown.concat(monthlyEvents);
+            break;
+          }
+
+          // Calculate interest for the rest of the month
+          const daysSinceLastEvent = (cycleEndDate.getTime() - lastEventDate.getTime()) / (1000 * 60 * 60 * 24) + 1;
+          cumulativeInterestForMonth += balance * dailyRate * daysSinceLastEvent;
+          
+          // EMI Payment for the month
+          const finalBalanceBeforeEMI = balance + cumulativeInterestForMonth;
+          let principalPaid = emi;
+          if (finalBalanceBeforeEMI < emi) {
+               principalPaid = finalBalanceBeforeEMI;
+          }
+          balance = finalBalanceBeforeEMI - principalPaid;
+          cumulativePrincipalForMonth = principalPaid - cumulativeInterestForMonth;
+          
+          // Add EMI events to the breakdown
+          const emiPaymentDate = new Date(cycleEndDate);
+          emiPaymentDate.setDate(emiPaymentDate.getDate() + 1);
+          monthlyEvents.push({
+            event: "EMI Paid",
+            emi: emi,
+            interest: cumulativeInterestForMonth,
+            principal: cumulativePrincipalForMonth,
+            balance: balance < 0 ? 0 : balance,
+            date: formatDate(emiPaymentDate),
+            month: totalMonths
+          });
+          
+          breakdown = breakdown.concat(monthlyEvents);
+
+          // Build the clean monthly report
+          monthlyReport.push({
+            month: totalMonths,
+            balance: balance < 0 ? 0 : balance,
+            interestPaid: cumulativeInterestForMonth,
+            principalPaid: cumulativePrincipalForMonth
+          });
+          
+          currentDate = new Date(emiPaymentDate);
+
+          if (balance <= 0) break;
+      }
+      return { breakdown, monthlyReport, totalMonths };
+  }
+
+  calculateBtn.addEventListener("click", () => {
+    const loanAmount = parseFloat(document.getElementById("loanAmount").value);
+    const annualRatePercent = parseFloat(document.getElementById("interestRate").value);
+    const annualRate = annualRatePercent / 100;
+    const tenure = parseInt(document.getElementById("loanTenure").value);
+    const prepaymentType = document.getElementById("prepaymentType").value;
+    const loanStartDate = new Date(document.getElementById("loanStartDate").value + 'T00:00:00');
+
+    // Basic validations
+    if (
+      isNaN(loanAmount) || loanAmount <= 0 ||
+      isNaN(annualRate) || annualRate < 0 ||
+      isNaN(tenure) || tenure <= 0
+    ) {
+      alert("Please fill in all main fields with valid positive values.");
+      return;
+    }
+    if (isNaN(loanStartDate.getTime())) {
+      alert("Please enter a valid loan start date.");
+      return;
+    }
+
+    const prepayments = [];
+    for (const div of prepaymentsList.children) {
+      const inputs = div.querySelectorAll("input");
+      const dateVal = new Date(inputs[0].value + 'T00:00:00');
+      const lumpVal = parseFloat(inputs[1].value);
+
+      if (isNaN(dateVal.getTime())) {
+        alert("Please enter a valid date for all prepayments.");
+        return;
+      }
+      if (isNaN(lumpVal) || lumpVal <= 0) {
+        alert("Lump sum prepayment amount must be positive.");
+        return;
+      }
+      prepayments.push({ lumpSum: lumpVal, date: dateVal });
+    }
+    prepayments.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    const monthlyRate = annualRate / 12;
+    let emi;
+    if (annualRate === 0) {
+        emi = loanAmount / tenure;
+    } else {
+        emi = loanAmount * monthlyRate * Math.pow(1 + monthlyRate, tenure) / (Math.pow(1 + monthlyRate, tenure) - 1);
+    }
+    
+    // Get amortization data for both scenarios
+    const { breakdown, monthlyReport, totalMonths } = getMonthlyReport(loanAmount, monthlyRate, tenure, loanStartDate, prepayments);
+    const { monthlyReport: monthlyReportWithoutPrepayments } = getMonthlyReport(loanAmount, monthlyRate, tenure, loanStartDate);
+
+    const totalInterestPaid = monthlyReport.reduce((acc, curr) => acc + curr.interestPaid, 0);
+    const totalInterestWithoutPrepayments = monthlyReportWithoutPrepayments.reduce((acc, curr) => acc + curr.interestPaid, 0);
+    const interestSaved = totalInterestWithoutPrepayments - totalInterestPaid;
+    
+    resultDiv.style.display = "block";
+    resultDiv.innerHTML = `
+      <h3>Result</h3>
+      <p><b>Monthly EMI:</b> ₹${Math.ceil(emi)}</p>
+      <p><b>Total Interest Paid:</b> ₹${totalInterestPaid.toFixed(2)}</p>
+      <p><b>Total Months:</b> ${totalMonths}</p>
+      <p><b>Total Interest Saved:</b> ₹${interestSaved.toFixed(2)}</p>
+    `;
+
+    let tableHTML = `<table>
+      <tr><th>Event</th><th>Month</th><th>EMI</th><th>Interest</th><th>Principal</th><th>Outstanding Balance</th><th>Date</th></tr>`;
+    breakdown.forEach((r, index) => {
+        let monthDisplay = r.month || "";
+        let emiDisplay = r.emi === 0 ? "" : `₹${Math.ceil(r.emi)}`;
+        let principalDisplay = r.principal === 0 ? "" : `₹${Math.ceil(r.principal)}`;
+        let interestDisplay = r.interest === 0 ? "" : `₹${Math.ceil(r.interest)}`;
+        
+      tableHTML += `<tr>
+        <td>${r.event}</td>
+        <td>${monthDisplay}</td>
+        <td>${emiDisplay}</td>
+        <td>${interestDisplay}</td>
+        <td>${principalDisplay}</td>
+        <td>₹${Math.ceil(r.balance)}</td>
+        <td>${r.date ?? ""}</td>
+      </tr>`;
+    });
+    tableHTML += `</table>`;
+
+    breakdownDiv.innerHTML = tableHTML;
+    toggleBtn.style.display = "inline-block";
+    breakdownDiv.style.display = "none";
+    toggleBtn.textContent = "Show Breakdown";
+
+    document.getElementById("chart-container").style.display = "block";
+
+    // --- Chart Generation ---
+
+    // Destroy existing charts to prevent stacking
+    if (charts.comparison) charts.comparison.destroy();
+    if (charts.pi) charts.pi.destroy();
+
+    const labels = monthlyReport.map(r => `Month ${r.month}`);
+    const noPrepaymentLabels = monthlyReportWithoutPrepayments.map(r => `Month ${r.month}`);
+
+    // Chart 1: Comparison Chart (Outstanding Balance)
+    const comparisonCtx = document.getElementById('comparisonChart').getContext('2d');
+    charts.comparison = new Chart(comparisonCtx, {
+        type: 'line',
+        data: {
+            labels: noPrepaymentLabels, // Use the longest tenure for labels
+            datasets: [
+                {
+                    label: 'Outstanding Balance (No Prepayment)',
+                    data: monthlyReportWithoutPrepayments.map(r => Math.ceil(r.balance)),
+                    borderColor: '#dc3545',
+                    borderDash: [5, 5],
+                    fill: false,
+                },
+                {
+                    label: 'Outstanding Balance (With Prepayment)',
+                    data: monthlyReport.map(r => Math.ceil(r.balance)),
+                    borderColor: '#28a745',
+                    fill: false,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                title: { display: true, text: 'Outstanding Loan Balance Comparison' }
+            },
+            scales: {
+                x: { title: { display: true, text: 'Month' } },
+                y: { title: { display: true, text: 'Balance (₹)' } }
+            }
+        }
+    });
+
+    // Chart 2: Principal vs Interest
+    const piCtx = document.getElementById('principalInterestChart').getContext('2d');
+    charts.pi = new Chart(piCtx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Principal',
+                    data: monthlyReport.map(r => Math.ceil(r.principalPaid)),
+                    backgroundColor: '#28a745',
+                },
+                {
+                    label: 'Interest',
+                    data: monthlyReport.map(r => Math.ceil(r.interestPaid)),
+                    backgroundColor: '#dc3545',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: { stacked: true },
+                y: { stacked: true, title: { display: true, text: 'Amount Paid (₹)' } }
+            },
+            plugins: {
+                title: { display: true, text: 'Principal vs. Interest Per Month' }
+            }
+        }
+    });
+
+  });
+
+  toggleBtn.addEventListener("click", () => {
+    if (breakdownDiv.style.display === "none" || breakdownDiv.style.display === "") {
+      breakdownDiv.style.display = "block";
+      toggleBtn.textContent = "Hide Breakdown";
+    } else {
+      breakdownDiv.style.display = "none";
+      toggleBtn.textContent = "Show Breakdown";
+    }
+  });
+
+  addPrepaymentRow();
+});
+</script>
+
+</body>
+</html>
